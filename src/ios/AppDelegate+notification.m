@@ -80,7 +80,19 @@ NSString *const pushPluginApplicationDidBecomeActiveNotification = @"pushPluginA
 
 - (void)application:(UIApplication *)application didReceiveRemoteNotification:(NSDictionary *)userInfo fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler {
     NSLog(@"didReceiveNotification with fetchCompletionHandler");
+    NSMutableDictionary *mutable_userInfo = [userInfo mutableCopy];
+    [mutable_userInfo setValue:@"no" forKey:@"acknowledged"];
+    // Now we try to acknowledge receipt of this notification in the background (otherwise we can do so in the foreground no worries eh? Double acknowledgements are not actually important, I don't think)
+    id ack_url = [userInfo objectForKey:@"gcm.notification.onReceived"];
+    if ([ack_url isKindOfClass:[NSString class]]) {
+        NSLog(@"Going to try acknowledging this notification");
+        NSMutableURLRequest *ack_request = [[NSMutableURLRequest alloc] init];
+        [ack_request setURL:[NSURL URLWithString:ack_url]];
+        [ack_request setHTTPMethod:@"GET"];
 
+        NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        [[session dataTaskWithRequest:ack_request] resume];
+    }
     // app is in the background or inactive, so only call notification callback if this is a silent push
     if (application.applicationState != UIApplicationStateActive) {
 
@@ -95,7 +107,12 @@ NSString *const pushPluginApplicationDidBecomeActiveNotification = @"pushPluginA
         } else if ([contentAvailable isKindOfClass:[NSNumber class]]) {
             silent = [contentAvailable integerValue];
         }
-
+        
+        id suppress_silent = [userInfo objectForKey:@"gcm.notification.suppress_background_activity"];
+        if ([suppress_silent isKindOfClass:[NSString class]] && [suppress_silent isEqualToString:@"1"]) {
+            silent = 0;
+        }
+        
         if (silent == 1) {
             NSLog(@"this should be a silent push");
             void (^safeHandler)(UIBackgroundFetchResult) = ^(UIBackgroundFetchResult result){
@@ -119,13 +136,13 @@ NSString *const pushPluginApplicationDidBecomeActiveNotification = @"pushPluginA
                 [pushHandler.handlerObj setObject:safeHandler forKey:@"handler"];
             }
 
-            pushHandler.notificationMessage = userInfo;
+            pushHandler.notificationMessage = mutable_userInfo;
             pushHandler.isInline = NO;
             [pushHandler notificationReceived];
         } else {
             NSLog(@"just put it in the shade");
             //save it for later
-            self.launchNotification = userInfo;
+            self.launchNotification = mutable_userInfo;
             completionHandler(UIBackgroundFetchResultNewData);
         }
 
