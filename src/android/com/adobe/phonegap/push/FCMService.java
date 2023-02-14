@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.security.SecureRandom;
 
+
 @SuppressLint("NewApi")
 public class FCMService extends FirebaseMessagingService implements PushConstants {
 
@@ -85,6 +86,30 @@ public class FCMService extends FirebaseMessagingService implements PushConstant
     }
     for (Map.Entry<String, String> entry : message.getData().entrySet()) {
       extras.putString(entry.getKey(), entry.getValue());
+    }
+
+    /*
+        Make an attempt at acknowledging receipt of this notification, regardless of 
+        whether the user later interacts with it. So there.
+        onReceived
+    */
+    if (extras.containsKey("onReceived")) {
+        String ack_url = (String)extras.get("onReceived");
+        Log.d(LOG_TAG, "Attempting to acknowledge notification receipt before doing anything else");
+        try {
+            URL ack = new URL(ack_url);
+            HttpURLConnection ack_connection = (HttpURLConnection)ack.openConnection();
+            try {
+                ack_connection.setRequestMethod("GET");
+                ack_connection.connect();
+                int code = ack_connection.getResponseCode();
+                Log.d(LOG_TAG, "Ack results: " + code);
+            } finally {
+                ack_connection.disconnect();
+            }
+        } catch (Exception e) {
+            Log.e(LOG_TAG, "Caught exception whilst acking:", e);
+        }
     }
 
     if (extras != null && isAvailableSender(from)) {
