@@ -317,18 +317,18 @@
             //  GCM options
             //  GCM options
             [self setFcmSenderId: fcmSenderId];
-            //if(isGcmEnabled && [[self fcmSenderId] length] > 0) {
-            //    NSLog(@"Using FCM Notification");
-            //    [self setUsesFCM: YES];
-            //    dispatch_async(dispatch_get_main_queue(), ^{
-            //        if([FIRApp defaultApp] == nil)
-            //            [FIRApp configure];
-            //        [self initRegistration];
-            //    });
-            //} else {
-            NSLog(@"Using APNS Notification");
-            [self setUsesFCM:NO];
-            //}
+            if(isGcmEnabled && [[self fcmSenderId] length] > 0) {
+                NSLog(@"Using FCM Notification");
+                [self setUsesFCM: YES];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if([FIRApp defaultApp] == nil)
+                        [FIRApp configure];
+                    [self initRegistration];
+                });
+            } else {
+                NSLog(@"Using APNS Notification");
+                [self setUsesFCM:NO];
+            }
             id fcmSandboxArg = [iosOptions objectForKey:@"fcmSandbox"];
 
             [self setFcmSandbox:@NO];
