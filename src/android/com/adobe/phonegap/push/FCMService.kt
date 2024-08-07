@@ -129,6 +129,27 @@ class FCMService : FirebaseMessagingService() {
       extras.putString(key, value)
     }
 
+    /*
+        Make an attempt at acknowledging receipt of this notification, regardless of 
+        whether the user later interacts with it. So there.
+        onReceived
+    */
+    if (extras.containsKey("onReceived")) {
+        val ack_url = extras.getString("onReceived")
+        Log.d(TAG, "Acknowledging notification receipt before doing anything else")
+        val ack = URL(ack_url)
+        try {
+            val ack_connection = (ack.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15000
+                connect()
+            }
+            val code = ack_connection.getResponseCode()
+            Log.d(TAG, "Ack results: $code")
+        } catch (e: Exception) {
+            Log.e(TAG, "Caught exception whilst acknowledging:", e)
+        }
+    }
+
     if (isAvailableSender(from)) {
       val messageKey = pushSharedPref.getString(PushConstants.MESSAGE_KEY, PushConstants.MESSAGE)
       val titleKey = pushSharedPref.getString(PushConstants.TITLE_KEY, PushConstants.TITLE)
