@@ -906,13 +906,12 @@ class FCMService : FirebaseMessagingService() {
           setNotification(notId, "")
 
           message?.let { messageStr ->
-            val bigText = NotificationCompat.BigTextStyle().run {
-              bigText(fromHtml(messageStr))
-              setBigContentTitle(fromHtml(it.getString(PushConstants.TITLE)))
+            val bigText = NotificationCompat.BigTextStyle()
+              .bigText(fromHtml(messageStr))
+              .setBigContentTitle(fromHtml(it.getString(PushConstants.TITLE)))
 
-              it.getString(PushConstants.SUMMARY_TEXT)?.let { summaryText ->
-                setSummaryText(fromHtml(summaryText))
-              }
+            it.getString(PushConstants.SUMMARY_TEXT)?.let { summaryText ->
+              bigText.setSummaryText(fromHtml(summaryText))
             }
 
             mBuilder.setContentText(fromHtml(messageStr))
