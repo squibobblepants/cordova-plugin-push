@@ -24,14 +24,17 @@
  */
 
 #import "PushPlugin.h"
+#import "PushPluginFCM.h"
 #import "PushPluginSettings.h"
 #import "AppDelegate+notification.h"
 
-@import Firebase;
-@import FirebaseCore;
-@import FirebaseMessaging;
+@interface PushPlugin ()
 
-@implementation PushPlugin : CDVPlugin
+@property (nonatomic, strong) PushPluginFCM *pushPluginFCM;
+
+@end
+
+@implementation PushPlugin
 
 @synthesize notificationMessage;
 @synthesize isInline;
@@ -40,50 +43,20 @@
 @synthesize clearBadge;
 @synthesize forceShow;
 @synthesize handlerObj;
-@synthesize usesFCM;
-@synthesize fcmSenderId;
-@synthesize fcmTopics;
 
-- (void)initRegistration {
-    [[FIRMessaging messaging] tokenWithCompletion:^(NSString *token, NSError *error) {
-        if (error != nil) {
-            NSLog(@"[PushPlugin] Error getting FCM registration token: %@", error);
-        } else {
-            NSLog(@"[PushPlugin] FCM registration token: %@", token);
+- (void)pluginInitialize {
+    self.pushPluginFCM = [[PushPluginFCM alloc] initWithGoogleServicePlist];
 
-            id topics = [self fcmTopics];
-            if (topics != nil) {
-                for (NSString *topic in topics) {
-                    NSLog(@"[PushPlugin] subscribe to topic: %@", topic);
-                    id pubSub = [FIRMessaging messaging];
-                    [pubSub subscribeToTopic:topic];
-                }
-            }
-
-            [self registerWithToken: token];
-        }
-    }];
-}
-
-//  FCM refresh token
-//  Unclear how this is testable under normal circumstances
-- (void)onTokenRefresh {
-#if !TARGET_IPHONE_SIMULATOR
-    // A rotation of the registration tokens is happening, so the app needs to request a new token.
-    NSLog(@"[PushPlugin] The FCM registration token needs to be changed.");
-    [self initRegistration];
-#endif
+    if([self.pushPluginFCM isFCMEnabled]) {
+        [self.pushPluginFCM configure:self.commandDelegate];
+    }
 }
 
 - (void)unregister:(CDVInvokedUrlCommand *)command {
     NSArray* topics = [command argumentAtIndex:0];
 
     if (topics != nil) {
-        id pubSub = [FIRMessaging messaging];
-        for (NSString *topic in topics) {
-            NSLog(@"[PushPlugin] unsubscribe from topic: %@", topic);
-            [pubSub unsubscribeFromTopic:topic];
-        }
+        [self.pushPluginFCM unsubscribeFromTopics:topics];
     } else {
         [[UIApplication sharedApplication] unregisterForRemoteNotifications];
         [self successWithMessage:command.callbackId withMsg:@"unregistered"];
@@ -91,33 +64,39 @@
 }
 
 - (void)subscribe:(CDVInvokedUrlCommand *)command {
-    NSString* topic = [command argumentAtIndex:0];
+    if (!self.pushPluginFCM.isFCMEnabled) {
+        NSLog(@"[PushPlugin] The 'subscribe' API not allowed. FCM is not enabled.");
+        [self successWithMessage:command.callbackId withMsg:@"The 'subscribe' API not allowed. FCM is not enabled."];
+        return;
+    }
 
-    if (topic != nil) {
-        NSLog(@"[PushPlugin] subscribe from topic: %@", topic);
-        id pubSub = [FIRMessaging messaging];
-        [pubSub subscribeToTopic:topic];
-        NSLog(@"[PushPlugin] Successfully subscribe to topic %@", topic);
-        [self successWithMessage:command.callbackId withMsg:[NSString stringWithFormat:@"Successfully subscribe to topic %@", topic]];
-    } else {
+    NSString* topic = [command argumentAtIndex:0];
+    if (topic == nil) {
         NSLog(@"[PushPlugin] There is no topic to subscribe");
         [self successWithMessage:command.callbackId withMsg:@"There is no topic to subscribe"];
+        return;
     }
+
+    [self.pushPluginFCM subscribeToTopic:topic];
+    [self successWithMessage:command.callbackId withMsg:[NSString stringWithFormat:@"Successfully subscribe to topic %@", topic]];
 }
 
 - (void)unsubscribe:(CDVInvokedUrlCommand *)command {
-    NSString* topic = [command argumentAtIndex:0];
-
-    if (topic != nil) {
-        NSLog(@"[PushPlugin] unsubscribe from topic: %@", topic);
-        id pubSub = [FIRMessaging messaging];
-        [pubSub unsubscribeFromTopic:topic];
-        NSLog(@"[PushPlugin] Successfully unsubscribe from topic %@", topic);
-        [self successWithMessage:command.callbackId withMsg:[NSString stringWithFormat:@"Successfully unsubscribe from topic %@", topic]];
-    } else {
-        NSLog(@"[PushPlugin] There is no topic to unsubscribe");
-        [self successWithMessage:command.callbackId withMsg:@"There is no topic to unsubscribe"];
+    if (!self.pushPluginFCM.isFCMEnabled) {
+        NSLog(@"[PushPlugin] The 'unsubscribe' API not allowed. FCM is not enabled.");
+        [self successWithMessage:command.callbackId withMsg:@"The 'unsubscribe' API not allowed. FCM is not enabled."];
+        return;
     }
+
+    NSString* topic = [command argumentAtIndex:0];
+    if (topic == nil) {
+        NSLog(@"[PushPlugin] There is no topic to unsubscribe from.");
+        [self successWithMessage:command.callbackId withMsg:@"There is no topic to unsubscribe from."];
+        return;
+    }
+
+    [self.pushPluginFCM unsubscribeFromTopic:topic];
+    [self successWithMessage:command.callbackId withMsg:[NSString stringWithFormat:@"Successfully unsubscribe from topic %@", topic]];
 }
 
 - (void)init:(CDVInvokedUrlCommand *)command {
@@ -125,27 +104,25 @@
     [[PushPluginSettings sharedInstance] updateSettingsWithOptions:[options objectForKey:@"ios"]];
     PushPluginSettings *settings = [PushPluginSettings sharedInstance];
 
+    if ([self.pushPluginFCM isFCMEnabled]) {
+        self.pushPluginFCM.callbackId = command.callbackId;
+    }
+
+    self.callbackId = command.callbackId;
+
     if ([settings voipEnabled]) {
         [self.commandDelegate runInBackground:^ {
             NSLog(@"[PushPlugin] VoIP set to true");
-
-            self.callbackId = command.callbackId;
-
             PKPushRegistry *pushRegistry = [[PKPushRegistry alloc] initWithQueue:dispatch_get_main_queue()];
             pushRegistry.delegate = self;
             pushRegistry.desiredPushTypes = [NSSet setWithObject:PKPushTypeVoIP];
         }];
     } else {
         NSLog(@"[PushPlugin] VoIP missing or false");
-        [[NSNotificationCenter defaultCenter]
-          addObserver:self selector:@selector(onTokenRefresh)
-          name:FIRMessagingRegistrationTokenRefreshedNotification object:nil];
 
         [self.commandDelegate runInBackground:^ {
             NSLog(@"[PushPlugin] register called");
-            self.callbackId = command.callbackId;
             self.isInline = NO;
-            self.fcmTopics = [settings fcmTopics];
             self.forceShow = [settings forceShowEnabled];
             self.clearBadge = [settings clearBadgeEnabled];
             if (self.clearBadge) {
@@ -173,39 +150,9 @@
             UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
             [center setNotificationCategories:[settings categories]];
 
-            [[NSNotificationCenter defaultCenter] addObserver:self
-                                                     selector:@selector(handleNotificationSettings:)
-                                                         name:pushPluginApplicationDidBecomeActiveNotification
-                                                       object:nil];
-
-            // Read GoogleService-Info.plist
-            NSString *path = [[NSBundle mainBundle] pathForResource:@"GoogleService-Info" ofType:@"plist"];
-
-            // Load the file content and read the data into arrays
-            NSDictionary *dict = [[NSDictionary alloc] initWithContentsOfFile:path];
-            fcmSenderId = [dict objectForKey:@"GCM_SENDER_ID"];
-            BOOL isGcmEnabled = [[dict valueForKey:@"IS_GCM_ENABLED"] boolValue];
-
-            NSLog(@"[PushPlugin] FCM Sender ID %@", fcmSenderId);
-
-            //  GCM options
-            [self setFcmSenderId: fcmSenderId];
-            if(isGcmEnabled && [[self fcmSenderId] length] > 0) {
-                NSLog(@"[PushPlugin] Using FCM Notification");
-                [self setUsesFCM: YES];
+            // If there is a pending startup notification, we will delay to allow JS event handlers to setup
+            if (notificationMessage) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if([FIRApp defaultApp] == nil)
-                        [FIRApp configure];
-                    [self initRegistration];
-                });
-            } else {
-                NSLog(@"[PushPlugin] Using APNS Notification");
-                [self setUsesFCM:NO];
-            }
-
-            if (notificationMessage) {            // if there is a pending startup notification
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    // delay to allow JS event handlers to be setup
                     [self performSelector:@selector(notificationReceived) withObject:nil afterDelay: 0.5];
                 });
             }
@@ -218,29 +165,25 @@
         NSLog(@"[PushPlugin] Unexpected call to didRegisterForRemoteNotificationsWithDeviceToken, ignoring: %@", deviceToken);
         return;
     }
+
     NSLog(@"[PushPlugin] register success: %@", deviceToken);
 
+    if ([self.pushPluginFCM isFCMEnabled]) {
+        [self.pushPluginFCM configureTokens:deviceToken];
+    } else {
+        [self registerWithToken:[self convertTokenToString:deviceToken]];
+    }
+}
+
+- (NSString *)convertTokenToString:(NSData *)deviceToken {
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
     // [deviceToken description] is like "{length = 32, bytes = 0xd3d997af 967d1f43 b405374a 13394d2f ... 28f10282 14af515f }"
-    NSString *token = [self hexadecimalStringFromData:deviceToken];
+    return [self hexadecimalStringFromData:deviceToken];
 #else
     // [deviceToken description] is like "<124686a5 556a72ca d808f572 00c323b9 3eff9285 92445590 3225757d b83967be>"
-    NSString *token = [[[[deviceToken description] stringByReplacingOccurrencesOfString:@"<"withString:@""]
+    return [[[[deviceToken description] stringByReplacingOccurrencesOfString:@"<"withString:@""]
                         stringByReplacingOccurrencesOfString:@">" withString:@""]
                        stringByReplacingOccurrencesOfString: @" " withString: @""];
-#endif
-
-#if !TARGET_IPHONE_SIMULATOR
-    // Check what Notifications the user has turned on.  We registered for all three, but they may have manually disabled some or all of them.
-
-    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
-    __weak PushPlugin *weakSelf = self;
-    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings * _Nonnull settings) {
-
-        if(![weakSelf usesFCM]) {
-            [weakSelf registerWithToken: token];
-        }
-    }];
 #endif
 }
 
@@ -408,14 +351,11 @@
 }
 
 - (void)registerWithToken:(NSString *)token {
-    // Send result to trigger 'registration' event but keep callback
     NSMutableDictionary* message = [NSMutableDictionary dictionaryWithCapacity:2];
     [message setObject:token forKey:@"registrationId"];
-    if ([self usesFCM]) {
-        [message setObject:@"FCM" forKey:@"registrationType"];
-    } else {
-        [message setObject:@"APNS" forKey:@"registrationType"];
-    }
+    [message setObject:@"APNS" forKey:@"registrationType"];
+
+    // Send result to trigger 'registration' event but keep callback
     CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:message];
     [pluginResult setKeepCallbackAsBool:YES];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
@@ -456,7 +396,7 @@
         NSLog(@"[PushPlugin] handlerObj");
         completionHandler = [handlerObj[[timer userInfo]] copy];
         if (completionHandler) {
-            NSLog(@"Push Plugin: stopBackgroundTask (remaining t: %f)", app.backgroundTimeRemaining);
+            NSLog(@"[PushPlugin] stopBackgroundTask (remaining t: %f)", app.backgroundTimeRemaining);
             completionHandler(UIBackgroundFetchResultNewData);
             completionHandler = nil;
         }
@@ -486,45 +426,47 @@
     [self notificationReceived];
 }
 
-- (void)handleNotificationSettings:(NSNotification *)notification {
-    [self handleNotificationSettingsWithAuthorizationOptions:nil];
-}
-
 - (void)handleNotificationSettingsWithAuthorizationOptions:(NSNumber *)authorizationOptionsObject {
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     UNAuthorizationOptions authorizationOptions = [authorizationOptionsObject unsignedIntegerValue];
 
     __weak UNUserNotificationCenter *weakCenter = center;
     [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings * _Nonnull settings) {
-
         switch (settings.authorizationStatus) {
             case UNAuthorizationStatusNotDetermined:
             {
                 [weakCenter requestAuthorizationWithOptions:authorizationOptions completionHandler:^(BOOL granted, NSError * _Nullable error) {
+                    if (error) {
+                        NSLog(@"[PushPlugin] Error during authorization request: %@", error.localizedDescription);
+                    }
+
                     if (granted) {
-                        [self performSelectorOnMainThread:@selector(registerForRemoteNotifications)
-                                               withObject:nil
-                                            waitUntilDone:NO];
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [[UIApplication sharedApplication] registerForRemoteNotifications];
+                        });
+                    } else {
+                        NSLog(@"[PushPlugin] Notification authorization denied.");
                     }
                 }];
                 break;
             }
             case UNAuthorizationStatusAuthorized:
             {
-                [self performSelectorOnMainThread:@selector(registerForRemoteNotifications)
-                                       withObject:nil
-                                    waitUntilDone:NO];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [[UIApplication sharedApplication] registerForRemoteNotifications];
+                });
                 break;
             }
             case UNAuthorizationStatusDenied:
+            {
+                NSLog(@"[PushPlugin] User denied notification permission.");
+                break;
+            }
             default:
+                NSLog(@"[PushPlugin] Unhandled authorization status: %ld", (long)settings.authorizationStatus);
                 break;
         }
     }];
-}
-
-- (void)registerForRemoteNotifications {
-    [[UIApplication sharedApplication] registerForRemoteNotifications];
 }
 
 @end
