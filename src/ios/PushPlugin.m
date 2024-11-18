@@ -279,17 +279,27 @@
                     completionHandler(result);
                 });
             };
+
             if (self.handlerObj == nil) {
                 self.handlerObj = [NSMutableDictionary dictionaryWithCapacity:2];
             }
+
+            // Get the notId
             id notId = [userInfo objectForKey:@"notId"];
-            if (notId != nil) {
-                NSLog(@"[PushPlugin] notId %@", notId);
-                [self.handlerObj setObject:safeHandler forKey:notId];
-            } else {
-                NSLog(@"[PushPlugin] notId handler");
-                [self.handlerObj setObject:safeHandler forKey:@"handler"];
+            NSString *notIdKey = notId != nil ? [NSString stringWithFormat:@"%@", notId] : nil;
+
+            if (notIdKey == nil) {
+                // Create a unique notId
+                notIdKey = [NSString stringWithFormat:@"pushplugin-handler-%f", [NSDate timeIntervalSinceReferenceDate]];
+                // Add the unique notId to the userInfo. Passes to front-end payload.
+                [userInfo setValue:notIdKey forKey:@"notId"];
+                // Store the handler for the uniquly created notId.
             }
+
+            [self.handlerObj setObject:safeHandler forKey:notIdKey];
+
+            NSLog(@"[PushPlugin] Stored the completion handler for the background processing of notId %@", notIdKey);
+
             self.notificationMessage = userInfo;
             self.isInline = NO;
             [self notificationReceived];
@@ -336,13 +346,18 @@
 - (void)willPresentNotification:(NSNotification *)notification {
     NSLog(@"[PushPlugin] Notification was received while the app was in the foreground. (willPresentNotification)");
 
+    UIApplicationState applicationState = [UIApplication sharedApplication].applicationState;
+    NSNumber *applicationStateNumber = @((int)applicationState);
+
     // The original notification that comes from the CDVAppDelegate's willPresentNotification.
     UNNotification *originalNotification = notification.userInfo[@"notification"];
-    NSDictionary *userInfo = originalNotification.request.content.userInfo;
+    NSDictionary *originalUserInfo = originalNotification.request.content.userInfo;
+    NSMutableDictionary *modifiedUserInfo = [originalUserInfo mutableCopy];
+    [modifiedUserInfo setObject:applicationStateNumber forKey:@"applicationState"];
 
     void (^completionHandler)(UNNotificationPresentationOptions) = notification.userInfo[@"completionHandler"];
 
-    self.notificationMessage = userInfo;
+    self.notificationMessage = modifiedUserInfo;
     self.isInline = YES;
     [self notificationReceived];
 
@@ -368,18 +383,19 @@
 
     void (^completionHandler)(void) = notification.userInfo[@"completionHandler"];
 
+    UIApplicationState applicationState = [UIApplication sharedApplication].applicationState;
+    NSNumber *applicationStateNumber = @((int)applicationState);
     NSDictionary *originalUserInfo = response.notification.request.content.userInfo;
     NSMutableDictionary *modifiedUserInfo = [originalUserInfo mutableCopy];
-    [modifiedUserInfo setObject:response.actionIdentifier forKey:@"actionCallback"];
+    [modifiedUserInfo setObject:applicationStateNumber forKey:@"applicationState"];
 
-    switch ([UIApplication sharedApplication].applicationState) {
+    switch (applicationState) {
         case UIApplicationStateActive:
         {
+            NSLog(@"[PushPlugin] App is active. Notification message set with: %@", modifiedUserInfo);
+
             self.isInline = NO;
             self.notificationMessage = modifiedUserInfo;
-
-            NSLog(@"[PushPlugin] App is active. Notification message set with: %@", self.notificationMessage);
-
             [self notificationReceived];
             if (completionHandler) {
                 completionHandler();
@@ -388,16 +404,10 @@
         }
         case UIApplicationStateInactive:
         {
+            NSLog(@"[PushPlugin] App is inactive. Storing notification message for later launch with: %@", modifiedUserInfo);
+
             self.coldstart = YES;
-
-            if ([notification.userInfo[@"actionIdentifier"] rangeOfString:@"UNNotificationDefaultActionIdentifier"].location == NSNotFound) {
-                self.launchNotification = modifiedUserInfo;
-            } else {
-                self.launchNotification = originalUserInfo;
-            }
-
-            NSLog(@"[PushPlugin] App is inactive. Storing notification message for later launch with: %@", self.launchNotification);
-
+            self.launchNotification = modifiedUserInfo;
             if (completionHandler) {
                 completionHandler();
             }
@@ -405,6 +415,8 @@
         }
         case UIApplicationStateBackground:
         {
+            NSLog(@"[PushPlugin] App is in the background. Notification message set with: %@", modifiedUserInfo);
+
             void (^safeHandler)(void) = ^{
                 dispatch_async(dispatch_get_main_queue(), ^{
                     if (completionHandler) {
@@ -413,24 +425,28 @@
                 });
             };
 
-            self.isInline = NO;
-
             if (self.handlerObj == nil) {
                 self.handlerObj = [NSMutableDictionary dictionaryWithCapacity:2];
             }
 
+            // Get the notId
             id notId = modifiedUserInfo[@"notId"];
-            if (notId != nil) {
-                NSLog(@"[PushPlugin] notId %@", notId);
-                [self.handlerObj setObject:safeHandler forKey:notId];
-            } else {
-                NSLog(@"[PushPlugin] notId handler");
-                [self.handlerObj setObject:safeHandler forKey:@"handler"];
+            NSString *notIdKey = notId != nil ? [NSString stringWithFormat:@"%@", notId] : nil;
+
+            if (notIdKey == nil) {
+                // Create a unique notId
+                notIdKey = [NSString stringWithFormat:@"pushplugin-handler-%f", [NSDate timeIntervalSinceReferenceDate]];
+                // Add the unique notId to the userInfo. Passes to front-end payload.
+                [modifiedUserInfo setValue:notIdKey forKey:@"notId"];
+                // Store the handler for the uniquly created notId.
             }
 
-            self.notificationMessage = originalUserInfo;
+            [self.handlerObj setObject:safeHandler forKey:notIdKey];
 
-            NSLog(@"[PushPlugin] App is in the background. Notification message set with: %@", self.notificationMessage);
+            NSLog(@"[PushPlugin] Stored the completion handler for the background processing of notId %@", notIdKey);
+
+            self.isInline = NO;
+            self.notificationMessage = modifiedUserInfo;
 
             [self performSelectorOnMainThread:@selector(notificationReceived) withObject:self waitUntilDone:NO];
             break;
@@ -445,6 +461,16 @@
     {
         NSMutableDictionary* message = [NSMutableDictionary dictionaryWithCapacity:4];
         NSMutableDictionary* additionalData = [NSMutableDictionary dictionaryWithCapacity:4];
+
+        // Remove "actionCallback" when application state is not foreground. Only applied to foreground.
+        NSNumber *applicationStateNumber = self.notificationMessage[@"applicationState"];
+        UIApplicationState applicationState = (UIApplicationState)[applicationStateNumber intValue];
+        if (applicationState != UIApplicationStateActive) {
+            [(NSMutableDictionary *) self.notificationMessage removeObjectForKey:@"actionCallback"];
+        }
+        // @todo do not sent applicationState data to front for now. Figure out if we can add
+        // similar data to the other platforms.
+        [(NSMutableDictionary *) self.notificationMessage removeObjectForKey:@"applicationState"];
 
         for (id key in self.notificationMessage) {
             if ([key isEqualToString:@"aps"]) {
@@ -596,18 +622,23 @@
 }
 
 - (void) finish:(CDVInvokedUrlCommand *)command {
-    NSLog(@"[PushPlugin] finish called");
-
     [self.commandDelegate runInBackground:^ {
         NSString* notId = [command.arguments objectAtIndex:0];
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [NSTimer scheduledTimerWithTimeInterval:0.1
-                                             target:self
-                                           selector:@selector(stopBackgroundTask:)
-                                           userInfo:notId
-                                            repeats:NO];
-        });
+        if (notId == nil || [notId isKindOfClass:[NSNull class]]) {
+            // @todo review "didReceiveNotificationResponse"
+            NSLog(@"[PushPlugin] Skipping 'finish' API as notId is unavailable.");
+        } else {
+            NSLog(@"[PushPlugin] The 'finish' API was triggered for notId: %@", notId);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSLog(@"[PushPlugin] Creating timer scheduled for notId: %@", notId);
+                [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                 target:self
+                                               selector:@selector(stopBackgroundTask:)
+                                               userInfo:notId
+                                                repeats:NO];
+            });
+        }
 
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
@@ -615,21 +646,38 @@
 }
 
 - (void)stopBackgroundTask:(NSTimer *)timer {
-    UIApplication *app = [UIApplication sharedApplication];
-
-    NSLog(@"[PushPlugin] stopBackgroundTask called");
-
-    if (self.handlerObj) {
-        NSLog(@"[PushPlugin] handlerObj");
-        self.backgroundTaskcompletionHandler = [self.handlerObj[[timer userInfo]] copy];
-        if (self.backgroundTaskcompletionHandler) {
-            NSLog(@"[PushPlugin] stopBackgroundTask (remaining t: %f)", app.backgroundTimeRemaining);
-            self.backgroundTaskcompletionHandler(UIBackgroundFetchResultNewData);
-            self.backgroundTaskcompletionHandler = nil;
-        }
+    // If the handler object is nil, there is nothing to process
+    if (!self.handlerObj) {
+        NSLog(@"[PushPlugin] Warning (stopBackgroundTask): handlerObj was nil.");
+        return;
     }
-}
 
+    // Get the notification ID from the timer's userInfo dictionary
+    NSString *notId = (NSString *)[timer userInfo];
+
+    // Get the safe handler (completionHandler) for the notification ID.
+    void (^safeHandler)(UIBackgroundFetchResult) = self.handlerObj[notId];
+
+    // If the handler is missing for the notification ID, nothing to process.
+    if (!safeHandler) {
+        NSLog(@"[PushPlugin] Warning (stopBackgroundTask): No handler was found for notId: %@.", notId);
+        return;
+    }
+
+    UIApplication *app = [UIApplication sharedApplication];
+    if (app.applicationState == UIApplicationStateBackground) {
+        NSLog(@"[PushPlugin] Processing background task for notId: %@. Background time remaining: %f", notId, app.backgroundTimeRemaining);
+    } else {
+        NSLog(@"[PushPlugin] Processing background task for notId: %@. App is now in the foreground.", notId);
+    }
+
+    // Execute the handler to complete the background task
+    safeHandler(UIBackgroundFetchResultNewData);
+
+    // Remove the handler to prevent memory leaks.
+    [self.handlerObj removeObjectForKey:notId];
+    NSLog(@"[PushPlugin] Removed handler for notId: %@", notId);
+}
 
 - (void)pushRegistry:(PKPushRegistry *)registry didUpdatePushCredentials:(PKPushCredentials *)credentials forType:(NSString *)type {
     if([credentials.token length] == 0) {
