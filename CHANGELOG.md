@@ -1,5 +1,38 @@
 # Change Log
 
+## 5.0.0
+
+**Breaking:**
+
+- chore(android)!: remove before compile hook script (#307)
+- fix(ios)!: duplicate notification presentation on iOS 18.0 (#303)
+- feat(ios)!: move `AppDelegate` logic to `PushPlugin.m` (#300)
+- feat(ios)!: bump `firebase@10.24.0` (#294)
+- feat(ios)!: extract FCM related logic to `PushPluginFCM` (#293)
+- chore(ios)!: remove unused & deprecated code & styling formatting (#291)
+
+**Features:**
+
+- feat(ios): extract settings into `PushPluginSettings` (#292)
+- feat(ios): implement `forceShow` (#276)
+
+**Fixes:**
+
+- fix(android): `getCircleBitmap` not displaying image (#311)
+- fix(*): add `clearNotification` to typescript definitions (#309)
+- fix(ios): on notification event payload & stop background task (#301)
+- fix(ios): run `setApplicationIconBadgeNumber` on main thread (#302)
+- fix(android): clipped notification text and expand arrow (#286)
+- fix(ios): add missing `critical` to typings (#271)
+
+**Others:**
+
+- chore: bump plugin.xml to 5.0.0 (#310)
+- chore: revert back to `AppDelegate` (#306)
+- chore(ios): update all NSLog to include `[PushPlugin]` prefix (#290)
+- doc: update link to iOS payload keys (#312)
+- doc: formatting and including 5.0.0 (#308)
+
 ## 4.0.0
 
 **Breaking:**
