@@ -260,6 +260,22 @@
 
     void (^completionHandler)(UIBackgroundFetchResult) = notification.userInfo[@"completionHandler"];
 
+    /* TOM ADDED */
+    NSMutableDictionary *mutable_userInfo = [userInfo mutableCopy];
+    [mutable_userInfo setValue:@"no" forKey:@"acknowledged"];
+    // Now we try to acknowledge receipt of this notification in the background (otherwise we can do so in the foreground no worries eh? Double acknowledgements are not actually important, I don't think)
+    id ack_url = [userInfo objectForKey:@"gcm.notification.onReceived"];
+    if ([ack_url isKindOfClass:[NSString class]]) {
+        NSLog(@"Going to try acknowledging this notification");
+        NSMutableURLRequest *ack_request = [[NSMutableURLRequest alloc] init];
+        [ack_request setURL:[NSURL URLWithString:ack_url]];
+        [ack_request setHTTPMethod:@"GET"];
+
+        NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        [[session dataTaskWithRequest:ack_request] resume];
+    }
+    /* /Tom Added */
+
     // app is in the background or inactive, so only call notification callback if this is a silent push
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
         NSLog(@"[PushPlugin] app in-active");
@@ -272,6 +288,14 @@
         } else if ([contentAvailable isKindOfClass:[NSNumber class]]) {
             silent = [contentAvailable integerValue];
         }
+        
+        /* TOM ADDED */
+        id suppress_silent = [userInfo objectForKey:@"gcm.notification.suppress_background_activity"];
+        if ([suppress_silent isKindOfClass:[NSString class]] && [suppress_silent isEqualToString:@"1"]) {
+            silent = 0;
+        }
+        /* /TOM ADDED */
+
         if (silent == 1) {
             NSLog(@"[PushPlugin] this should be a silent push");
             void (^safeHandler)(UIBackgroundFetchResult) = ^(UIBackgroundFetchResult result){
@@ -300,13 +324,13 @@
 
             NSLog(@"[PushPlugin] Stored the completion handler for the background processing of notId %@", notIdKey);
 
-            self.notificationMessage = userInfo;
+            self.notificationMessage = mutable_userInfo;
             self.isInline = NO;
             [self notificationReceived];
         } else {
             NSLog(@"[PushPlugin] Application is not active, saving notification for later.");
 
-            self.launchNotification = userInfo;
+            self.launchNotification = mutable_userInfo;
             completionHandler(UIBackgroundFetchResultNewData);
         }
     } else {
